@@ -2,7 +2,7 @@ import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = "8653861753:AAEUuafpUZhmx_INOqR1oDdRgmtohkBaiZo"
+TOKEN = "8966095989:AAECkTerajVQZGccb2fVlQVasaGODAZIrZA"
 ADMIN_IDS = [5231145229, 7513168976] 
 OWNER_ID = 5231145229
 CHANNEL_USERNAME = "@v2rayng_tornado"
