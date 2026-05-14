@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
@@ -27,22 +28,26 @@ DIVIDER = "━━━━━━━━━━━━━━"
 
 # ================= DATABASE =================
 
+# اصلاح مسیر دیتابیس برای سرور
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'v2ray_bot.db')
+
 def init_db():
-    conn = sqlite3.connect('v2ray_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
     conn.commit()
     conn.close()
 
 def add_user(user_id):
-    conn = sqlite3.connect('v2ray_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (user_id,))
     conn.commit()
     conn.close()
 
 def get_all_users():
-    conn = sqlite3.connect('v2ray_bot.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users')
     users = [row[0] for row in cursor.fetchall()]
@@ -177,39 +182,68 @@ async def receipt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for admin in ADMIN_IDS:
         try:
-            # ارسال خود عکس/فایل برای ادمین
+            # فوروارد مستقیم پیام برای ادمین (حاوی اطلاعات فرستنده)
             sent = await context.bot.forward_message(chat_id=admin, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
-            # ذخیره آیدی برای پاسخ دهی ادمین
+            
+            # ذخیره در حافظه موقت
             user_messages[sent.message_id] = user_id
             
             admin_msg = (
-                f"🧾 <b>رسید پرداخت جدید دریافت شد</b>\n"
+                f"🧾 <b>رسید پرداخت جدید</b>\n"
                 f"{DIVIDER}\n"
-                f"👤 کاربر: {user_id}\n"
-                f"💎 سرویس: VIP\n"
-                f"📊 حجم: {gb}GB\n"
-                f"🔢 تعداد: {qty}\n"
-                f"💰 مبلغ واریزی: {total:,} تومان\n\n"
-                f"📥 برای پاسخ به کاربر روی همین پیام ریپلای کنید."
+                f"👤 کاربر: <code>{user_id}</code>\n"
+                f"💎 سرویس: VIP | {gb}GB\n"
+                f"🔢 تعداد: {qty} عدد\n"
+                f"💰 مبلغ: {total:,} تومان\n\n"
+                f"📥 برای پاسخ، روی <b>همین پیام</b> ریپلای کنید."
             )
             await context.bot.send_message(chat_id=admin, text=admin_msg, parse_mode="HTML")
         except: continue
     
     await update.message.reply_text("✅ رسید شما دریافت شد و برای ادمین‌ها ارسال گردید.\nپس از تایید، سرویس شما ارسال خواهد شد.")
 
+# ================= هوشمندسازی پاسخ ادمین =================
+
 async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = update.message.from_user.id
-    if not is_admin(admin_id) or not update.message.reply_to_message: return
+    if not is_admin(admin_id):
+        return
+
+    # چک کردن اینکه ادمین حتماً روی پیامی ریپلای کرده باشد
+    if not update.message.reply_to_message:
+        return
+
+    replied_msg = update.message.reply_to_message
+    target_user = None
+
+    # ۱. جستجو در حافظه موقت ربات
+    if replied_msg.message_id in user_messages:
+        target_user = user_messages[replied_msg.message_id]
     
-    replied_id = update.message.reply_to_message.message_id
-    if replied_id in user_messages:
-        target_user = user_messages[replied_id]
+    # ۲. اگر ریپلای روی پیام فوروارد شده باشد
+    elif replied_msg.forward_from:
+        target_user = replied_msg.forward_from.id
+    
+    # ۳. جستجوی آیدی عددی در متن پیام (اگر حافظه پاک شده باشد)
+    elif replied_msg.text and "کاربر:" in replied_msg.text:
+        try:
+            # استخراج آیدی از متن "کاربر: 123456"
+            target_user = int(replied_msg.text.split("کاربر:")[1].split("\n")[0].strip())
+        except: pass
+
+    if target_user:
         msg_text = update.message.text
         try:
             await context.bot.send_message(chat_id=target_user, text=f"<b>📩 پاسخ پشتیبانی:</b>\n\n{msg_text}", parse_mode="HTML")
-            await update.message.reply_text("✅ پیام شما به مشتری ارسال شد.")
+            await update.message.reply_text(f"✅ پیام با موفقیت به مشتری ({target_user}) ارسال شد.")
+            
+            # ارسال لاگ برای مالک اصلی اگر ادمین دیگری جواب داده بود
+            if admin_id != OWNER_ID:
+                await context.bot.send_message(chat_id=OWNER_ID, text=f"👮‍♂️ پاسخ ادمین {admin_id} به {target_user}:\n\n{msg_text}")
         except Exception as e:
-            await update.message.reply_text(f"❌ خطا در ارسال: {e}")
+            await update.message.reply_text(f"❌ ارسال نشد. احتمالاً کاربر ربات را بلاک کرده است.\nخطا: {e}")
+    else:
+        await update.message.reply_text("❌ آیدی مشتری پیدا نشد. لطفاً آیدی عددی کاربر را در متن ریپلای بنویسید یا مجدد تلاش کنید.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != OWNER_ID: return
@@ -238,6 +272,7 @@ app.add_handler(CallbackQueryHandler(select_plan, pattern="go_plans"))
 app.add_handler(CallbackQueryHandler(select_quantity, pattern="sel_"))
 app.add_handler(CallbackQueryHandler(order_invoice, pattern="qty_"))
 app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, receipt_handler))
+# فیلتر کردن متن‌ها برای پاسخ ادمین
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_reply))
 
 print("V2rayNG Tornado Bot is running...")
